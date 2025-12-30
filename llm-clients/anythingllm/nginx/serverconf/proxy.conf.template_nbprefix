@@ -74,11 +74,45 @@ location /api/kernels/ {
 # AnythingLLM calls
 ###############
 location = ${NB_PREFIX} {
-    return 302 $custom_scheme://$http_host/;
+    return 302 $custom_scheme://$http_host${NB_PREFIX}/;
 }
 
 location ${NB_PREFIX}/ {
-    return 302 $custom_scheme://$http_host/;
+    # Standard anythingllm/NGINX configuration
+    proxy_pass http://127.0.0.1:3001/;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection $connection_upgrade;
+    proxy_read_timeout 20d;
+
+    # Needed to make it work properly
+    proxy_set_header X-anythingllm-Request $custom_scheme://$http_host$request_uri;
+    proxy_set_header X-anythingllm-Root-Path ${NB_PREFIX};
+    proxy_set_header Host $http_host;
+    proxy_set_header X-Forwarded-Proto $custom_scheme;
+
+    # Fix absolute paths for assets (HTML + CSS)
+    sub_filter_once off;
+    # Default already includes text/html; adding it again causes warnings.
+    # Default includes text/html; we extend it for CSS + JS rewriting.
+    sub_filter_types text/css application/javascript;
+    sub_filter 'src="/' 'src="${NB_PREFIX}/';
+    sub_filter 'href="/' 'href="${NB_PREFIX}/';
+    sub_filter 'action="/' 'action="${NB_PREFIX}/';
+    sub_filter 'url("/' 'url("${NB_PREFIX}/';
+    sub_filter "url('/" "url('${NB_PREFIX}/";
+    sub_filter 'url(/' 'url(${NB_PREFIX}/';
+
+    # React Router runs with basename "/" by default. Patch the bundle so basename becomes NB_PREFIX,
+    # allowing the SPA to render correctly under /notebook/<ns>/<wb>.
+    sub_filter 'basename:t="/"' 'basename:t="${NB_PREFIX}"';
+    # AnythingLLM 1.9.1+ (data router) also defaults router basename via `e.basename||"/"`.
+    sub_filter 'e.basename||"/"' 'e.basename||"${NB_PREFIX}"';
+    
+    # Inject API + asset path rewrite shim (kept short to avoid nginx "too long parameter" crashes)
+    sub_filter '<head>' '<head><script>(function(){var p="${NB_PREFIX}";function api(u){try{if(typeof u!=="string")return u;if(u.startsWith(p+"/api/"))return u;if(u.startsWith("/api/"))return p+u;var o=window.location.origin,a=o+"/api/";if(u.startsWith(a))return u.replace(a,o+p+"/api/");}catch(e){}return u;}function as(u){try{if(typeof u!=="string")return u;var o=window.location.origin;if(u.startsWith(o+"/")){if(u.startsWith(o+p+"/"))return u;return u.replace(o+"/",o+p+"/");}if(u[0]==="/"&&!u.startsWith(p+"/"))return p+u;}catch(e){}return u;}var f=window.fetch;window.fetch=function(i,n){try{if(typeof i==="string")i=api(i);else if(typeof URL!=="undefined"&&i instanceof URL)i=api(i.toString());else if(typeof Request!=="undefined"&&i instanceof Request){var nu=api(i.url);if(nu!==i.url)i=new Request(nu,i);}}catch(e){}return f(i,n);};var xo=XMLHttpRequest.prototype.open;XMLHttpRequest.prototype.open=function(m,u){try{if(typeof u==="string")u=api(u);else if(typeof URL!=="undefined"&&u instanceof URL)u=api(u.toString());}catch(e){}return xo.apply(this,arguments);};var sa=Element.prototype.setAttribute;Element.prototype.setAttribute=function(n,v){try{if(typeof v==="string"&&v[0]==="/"&&!v.startsWith(p+"/")){if(n==="src"||n==="poster"||(n==="href"&&this.tagName==="LINK"))v=p+v;}}catch(e){}return sa.call(this,n,v);};try{var d=Object.getOwnPropertyDescriptor(HTMLImageElement.prototype,"src");if(d&&d.set){Object.defineProperty(HTMLImageElement.prototype,"src",{get:d.get,set:function(v){return d.set.call(this,as(v));}});}}catch(e){}try{document.querySelectorAll("img[src],link[rel~=icon][href],link[rel=stylesheet][href]").forEach(function(el){if(el.getAttribute("src"))el.setAttribute("src",as(el.getAttribute("src")));if(el.getAttribute("href"))el.setAttribute("href",as(el.getAttribute("href")));});}catch(e){};})();</script>';
+
+    access_log /var/log/nginx/anythingllm.access.log json if=$loggable;
 }
 
 location /api/ {

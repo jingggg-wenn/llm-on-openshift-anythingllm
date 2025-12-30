@@ -26,3 +26,6 @@ Thumbs.db
 # Backup files
 *.bak
 *.backup
+
+# AnythingLLM offline build
+llm-clients/anythingllm/offline/
